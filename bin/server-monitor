@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+export SM_DIR="${SM_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+source "${SM_DIR}/lib/utils.sh"
+source "${SM_DIR}/lib/config.sh"
+source "${SM_DIR}/lib/logging.sh"
+source "${SM_DIR}/lib/system.sh"
+source "${SM_DIR}/lib/cpu.sh"
+source "${SM_DIR}/lib/memory.sh"
+source "${SM_DIR}/lib/disk.sh"
+source "${SM_DIR}/lib/network.sh"
+source "${SM_DIR}/lib/processes.sh"
+source "${SM_DIR}/lib/services.sh"
+source "${SM_DIR}/lib/ports.sh"
+source "${SM_DIR}/lib/health.sh"
+source "${SM_DIR}/lib/json.sh"
+source "${SM_DIR}/lib/dashboard.sh"
+
+init_config
+
+show_help() {
+    cat <<EOF
+Usage: server-monitor [OPTIONS]
+
+Options:
+  --dashboard     Show the main terminal dashboard (default)
+  --cpu           Show CPU information
+  --memory        Show memory information
+  --disk          Show disk information
+  --network       Show network interfaces and traffic
+  --processes     Show top processes
+  --services      Show status of configured services
+  --ports         Show listening ports
+  --health        Evaluate system health and exit
+  --json          Output all metrics as JSON
+  --watch         Run in continuous watch mode
+  --interval SEC  Set refresh interval for watch mode (default: 2)
+  --version       Show version information
+  --help          Show this help message
+EOF
+    exit 0
+}
+
+show_version() {
+    echo "server-monitor v1.0.0"
+    exit 0
+}
+
+do_watch() {
+    local interval="${1:-$REFRESH_INTERVAL}"
+    while true; do
+        render_dashboard
+        sleep "$interval"
+    done
+}
+
+if [[ $# -eq 0 ]]; then
+    render_dashboard
+    exit $?
+fi
+
+ACTION=""
+WATCH_MODE=0
+INTERVAL="$REFRESH_INTERVAL"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dashboard)
+            ACTION="dashboard"
+            shift
+            ;;
+        --cpu)
+            ACTION="cpu"
+            shift
+            ;;
+        --memory)
+            ACTION="memory"
+            shift
+            ;;
+        --disk)
+            ACTION="disk"
+            shift
+            ;;
+        --network)
+            ACTION="network"
+            shift
+            ;;
+        --processes)
+            ACTION="processes"
+            shift
+            ;;
+        --services)
+            ACTION="services"
+            shift
+            ;;
+        --ports)
+            ACTION="ports"
+            shift
+            ;;
+        --health)
+            ACTION="health"
+            shift
+            ;;
+        --json)
+            ACTION="json"
+            shift
+            ;;
+        --watch)
+            WATCH_MODE=1
+            shift
+            ;;
+        --interval)
+            INTERVAL="$2"
+            shift 2
+            ;;
+        --version)
+            show_version
+            ;;
+        --help|-h)
+            show_help
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Try 'server-monitor --help' for more information."
+            exit 3
+            ;;
+    esac
+done
+
+if [[ "$WATCH_MODE" -eq 1 ]]; then
+    do_watch "$INTERVAL"
+    exit 0
+fi
+
+case "$ACTION" in
+    dashboard)
+        render_dashboard
+        ;;
+    cpu)
+        echo "Usage: $(get_cpu_usage)%"
+        echo "Temp:  $(get_cpu_temperature)"
+        echo "Info:  $(get_cpu_info)"
+        ;;
+    memory)
+        echo "RAM:  $(get_memory_info)"
+        echo "Swap: $(get_swap_info)"
+        ;;
+    disk)
+        get_disk_usage
+        ;;
+    network)
+        get_network_interfaces
+        ;;
+    processes)
+        echo "Total: $(get_process_count)"
+        get_top_cpu_processes 5
+        ;;
+    services)
+        get_service_status "$MONITORED_SERVICES"
+        ;;
+    ports)
+        get_listening_ports
+        ;;
+    health)
+        cpu=$(get_cpu_usage)
+        mem=$(get_memory_info | awk '{print $3}')
+        swap=$(get_swap_info | awk '{print $3}')
+        disk=$(get_disk_usage | head -n1 | awk '{print $2}' | tr -d '%')
+        load=$(get_load_average)
+        temp=$(get_cpu_temperature)
+        res=$(evaluate_health "${cpu:-0}" "${mem%.*}" "${swap%.*}" "${disk:-0}" "$load" "1" "$temp")
+        echo "$res" | awk '{print $1}'
+        exit $(echo "$res" | awk '{print $2}')
+        ;;
+    json)
+        generate_json
+        ;;
+    "")
+        render_dashboard
+        ;;
+esac
